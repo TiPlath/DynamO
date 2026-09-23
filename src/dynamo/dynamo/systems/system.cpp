@@ -20,6 +20,7 @@
 #include <dynamo/systems/DSMCspheres.hpp>
 #include <dynamo/systems/andersenThermostat.hpp>
 #include <dynamo/systems/francesco.hpp>
+#include <dynamo/systems/gaussianThermostat.hpp>
 #include <dynamo/systems/rescale.hpp>
 #include <dynamo/systems/rotateGravity.hpp>
 #include <dynamo/systems/sleep.hpp>
@@ -51,6 +52,8 @@ shared_ptr<System> System::getClass(const magnet::xml::Node &XML,
     return shared_ptr<System>(new SysDSMCSpheres(XML, Sim));
   else if (!XML.getAttribute("Type").getValue().compare("Rescale"))
     return shared_ptr<System>(new SysRescale(XML, Sim));
+  else if (!XML.getAttribute("Type").getValue().compare("Gaussian"))
+    return shared_ptr<System>(new SysGaussian(XML, Sim));
   else if (!XML.getAttribute("Type").getValue().compare("Umbrella"))
     return shared_ptr<System>(new SysUmbrella(XML, Sim));
   else if (!XML.getAttribute("Type").getValue().compare("Sleep"))
