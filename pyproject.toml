@@ -26,7 +26,14 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-dependencies = ["alive-progress", "pandas", "scipy", "uncertainties", "networkx"]
+dependencies = [
+    "alive-progress",
+    "pandas",
+    "scipy",
+    "uncertainties",
+    "networkx",
+    "matplotlib>=3.9.4",
+]
 
 [tool.scikit-build]
 cmake.build-type = "Release"
