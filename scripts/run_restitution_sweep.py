@@ -57,17 +57,22 @@ import pydynamo
 
 import restitution_common as common
 
-mgr = pydynamo.SimManager(
-    common.WORKDIR,
-    common.STATEVARS,
-    common.OUTPUTS,
-    restarts=common.RESTARTS,
-    processes=None,  # None = use all available processes
-)
+def main():
 
-mgr.run(
-    setup_worker=common.setup_worker,
-    particle_equil_events=common.PARTICLE_EQUIL_EVENTS,
-    particle_run_events=common.PARTICLE_RUN_EVENTS,
-    particle_run_events_block_size=common.PARTICLE_RUN_EVENTS_BLOCK_SIZE,
-)
+    mgr = pydynamo.SimManager(
+        common.WORKDIR,
+        common.STATEVARS,
+        common.OUTPUTS,
+        restarts=common.RESTARTS,
+        processes=None,  # None = use all available processes
+    )
+
+    mgr.run(
+        setup_worker=common.setup_worker,
+        particle_equil_events=common.PARTICLE_EQUIL_EVENTS,
+        particle_run_events=common.PARTICLE_RUN_EVENTS,
+        particle_run_events_block_size=common.PARTICLE_RUN_EVENTS_BLOCK_SIZE,
+    )   
+
+if __name__ == "__main__":
+    main()
