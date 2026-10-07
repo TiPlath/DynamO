@@ -53,11 +53,36 @@ Usage:
     This is safe to re-run: it resumes/extends previous runs rather than restarting them.
     Afterwards, run analyze_restitution_sweep.py to fit/plot the results.
 """
+import argparse
 import pydynamo
 
 import restitution_common as common
 
 def main():
+
+    # ---------------------------------------------------------------------
+    # Command‑line interface
+    # ---------------------------------------------------------------------
+    parser = argparse.ArgumentParser(description="Run the restitution‑sweep study.")
+    parser.add_argument(
+        "-elastic",
+        action="store_true",
+        help="Run only the elastic case (e = 1.0) – reproduces the Voigtmann paper.",
+    )
+    parser.add_argument(
+        "-nve",
+        action="store_true",
+        help="Disable the Gaussian thermostat (undriven dynamics, energy conserved only for e = 1).",
+    )
+    args = parser.parse_args()
+
+    # Adjust the common configuration based on flags
+    if args.elastic:
+        # Force the restitution coefficient list to contain only the elastic value
+        common.E_VALUES = [1.0]
+        common.update_statevars()
+    if args.nve:
+        common.disable_thermostat()
 
     mgr = pydynamo.SimManager(
         common.WORKDIR,

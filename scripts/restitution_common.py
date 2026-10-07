@@ -30,46 +30,92 @@ MAX_LATTICE_DENSITY = 1.3
 # literature (Voigtmann, EPL 96, 36006, 2011).
 QUICK_TEST = False
 
-if QUICK_TEST:
-    # Smaller system for quick testing - 2048 particles works reliably
-    # with the compression engine across the tested parameter range.
+
+def configure(quick):
+    """Select the quick or the full parameter ranges and rebuild STATEVARS.
+
+    Resets every range (also E_VALUES and RESTARTS), so call it before any
+    further adjustment such as restricting E_VALUES.
+    """
+    global QUICK_TEST, N_VALUES, DELTA_VALUES, XHAT_VALUES, PHI_VALUES, E_VALUES
+    global RESTARTS, PARTICLE_EQUIL_EVENTS, PARTICLE_RUN_EVENTS, PARTICLE_RUN_EVENTS_BLOCK_SIZE
+    QUICK_TEST = quick
     N_VALUES = [4 * 8**3]  # 2048 particles
-    DELTA_VALUES = [0.2, 0.35, 0.5]  # Size ratios to test
-    XHAT_VALUES = [0.2, 0.4, 0.6, 0.8]  # Small particle concentration
-    PHI_VALUES = list(numpy.round(numpy.arange(0.45, 0.62, 0.02), 3))  # Packing fractions
-    E_VALUES = [1.0, 0.9, 0.8]  # Restitution coefficients
-    RESTARTS = 1
-    PARTICLE_EQUIL_EVENTS = 200
-    PARTICLE_RUN_EVENTS = 400
-    PARTICLE_RUN_EVENTS_BLOCK_SIZE = 200
-else:
-    # More comprehensive parameter space coverage
-    N_VALUES = [4 * 8**3]  # 2048 particles
-    DELTA_VALUES = [0.2, 0.3, 0.35, 0.4, 0.5]
-    XHAT_VALUES = list(numpy.round(numpy.arange(0.1, 0.95, 0.1), 3))
-    PHI_VALUES = list(numpy.round(numpy.arange(0.45, 0.62, 0.01), 3))
-    E_VALUES = [1.0, 0.95, 0.9, 0.8, 0.7]
-    RESTARTS = 2
-    PARTICLE_EQUIL_EVENTS = 1000
-    PARTICLE_RUN_EVENTS = 2000
-    PARTICLE_RUN_EVENTS_BLOCK_SIZE = 500
+    if quick:
+        # Smaller system for quick testing - 2048 particles works reliably
+        # with the compression engine across the tested parameter range.
+        DELTA_VALUES = [0.2, 0.35, 0.5]  # Size ratios to test
+        XHAT_VALUES = [0.2, 0.4, 0.6, 0.8]  # Small particle concentration
+        PHI_VALUES = list(numpy.round(numpy.arange(0.45, 0.62, 0.02), 3))  # Packing fractions
+        E_VALUES = [1.0, 0.9, 0.8]  # Restitution coefficients
+        RESTARTS = 1
+        PARTICLE_EQUIL_EVENTS = 200
+        PARTICLE_RUN_EVENTS = 400
+        PARTICLE_RUN_EVENTS_BLOCK_SIZE = 200
+    else:
+        # More comprehensive parameter space coverage
+        DELTA_VALUES = [0.2, 0.3, 0.35, 0.4, 0.5]
+        XHAT_VALUES = list(numpy.round(numpy.arange(0.1, 0.95, 0.1), 3))
+        PHI_VALUES = list(numpy.round(numpy.arange(0.45, 0.62, 0.01), 3))
+        E_VALUES = [1.0, 0.95, 0.9, 0.8, 0.7]
+        RESTARTS = 2
+        PARTICLE_EQUIL_EVENTS = 1000
+        PARTICLE_RUN_EVENTS = 2000
+        PARTICLE_RUN_EVENTS_BLOCK_SIZE = 500
+    update_statevars()
 
 # Mean free time (in reduced time units) between global Gaussian-thermostat
 # rescale events. Keep this shorter than the natural collisional mean free
 # time at the target packing fractions or the granular temperature will sag
 # below the requested value for strongly dissipative (low e) state points.
+# An empty list means no thermostat at all (see disable_thermostat()).
 THERMOSTAT_MFT_VALUES = [0.01]
 
-STATEVARS = [
-    [
+# ---------------------------------------------------------------------------
+# Helper to (re)build the STATEVARS list from the current configuration.
+# This allows external scripts (e.g. finite_size_convergence.py) to modify
+# N_VALUES, DELTA_VALUES, XHAT_VALUES, PHI_VALUES, E_VALUES or
+# THERMOSTAT_MFT_VALUES and then call ``update_statevars()`` so that the
+# SimManager sees the updated sweep.
+# ---------------------------------------------------------------------------
+def _build_statevars() -> list:
+    sweep = [
         ("N", N_VALUES),
         ("delta", DELTA_VALUES),
         ("xhat", XHAT_VALUES),
         ("phi", PHI_VALUES),
         ("e", E_VALUES),
-        ("thermostat_mft", THERMOSTAT_MFT_VALUES),
     ]
-]
+    # An empty value list would make the Cartesian product (and the sweep) empty.
+    if THERMOSTAT_MFT_VALUES:
+        sweep.append(("thermostat_mft", THERMOSTAT_MFT_VALUES))
+    return [sweep]
+
+# Filled by configure() below.
+STATEVARS: list = []
+
+def update_statevars() -> None:
+    """Re‑create :data:`STATEVARS` from the current global parameter lists.
+
+    External code may modify ``N_VALUES``, ``DELTA_VALUES``, ``XHAT_VALUES``,
+    ``PHI_VALUES``, ``E_VALUES`` or ``THERMOSTAT_MFT_VALUES`` and then call
+    this function so that the :class:`pydynamo.SimManager` uses the new sweep
+    definition.
+    """
+    global STATEVARS
+    STATEVARS = _build_statevars()
+
+
+def disable_thermostat():
+    """Drop the Gaussian thermostat from the sweep (undriven dynamics)."""
+    global THERMOSTAT_MFT_VALUES
+    if any(e != 1.0 for e in E_VALUES):
+        print("WARNING: without a thermostat inelastic systems keep cooling and reach no steady state.")
+    THERMOSTAT_MFT_VALUES = []
+    update_statevars()
+
+
+configure(QUICK_TEST)
 
 OUTPUTS = ["D_A", "D_B", "T_system", "phi_actual", "T_A", "T_B"]
 
@@ -110,7 +156,7 @@ def setup_worker(config, state, logfile, particle_equil_events):
     xhat = state["xhat"]
     phi = state["phi"]
     e = state["e"]
-    mft = state["thermostat_mft"]
+    mft = state.get("thermostat_mft")  # absent when running without a thermostat
 
     n_large, n_small = binary_particle_counts(N, delta, xhat)
     mass_ratio = delta**3  # equal mass density for both species
@@ -188,12 +234,13 @@ def setup_worker(config, state, logfile, particle_equil_events):
     for interaction in interactions:
         interaction.set("Elasticity", repr(e))
 
-    system_events = xml.tree.find(".//SystemEvents")
-    thermostat = pydynamo.ET.SubElement(system_events, "System")
-    thermostat.set("Type", "Gaussian")
-    thermostat.set("Name", "Thermostat")
-    thermostat.set("MFT", repr(mft))
-    thermostat.set("Temperature", "1")
+    if mft is not None:
+        system_events = xml.tree.find(".//SystemEvents")
+        thermostat = pydynamo.ET.SubElement(system_events, "System")
+        thermostat.set("Type", "Gaussian")
+        thermostat.set("Name", "Thermostat")
+        thermostat.set("MFT", repr(mft))
+        thermostat.set("Temperature", "1")
     xml.save(config)
 
 
