@@ -49,12 +49,41 @@ def _check_fcc(N: int) -> None:
         raise SystemExit(f"N={N} does not fit an FCC lattice (needs 4*L^3, e.g. 2048, 2916, 4000, 5324)")
 
 
-def _run_sweep(N: int, workdir: Path, processes: int | None) -> pd.DataFrame:
+def _run_sweep(
+    N: int,
+    workdir: Path,
+    processes: int | None = None,
+    quick: bool = False,
+) -> pd.DataFrame:
     """Run (or resume) the sweep for one particle number and return its results.
 
-    An existing work directory is reused, so an interrupted run continues
-    where it stopped.
+    Parameters
+    ----------
+    N:
+        Particle number for the current sweep.
+    workdir:
+        Directory where the sweep data will be stored. It is created by the
+        caller if it does not already exist.
+    processes:
+        Number of parallel processes to hand to :class:`pydynamo.SimManager`.
+        ``None`` lets the manager decide (default behaviour of the original
+        script).
+    quick:
+        When ``True`` the sweep runs in *quick* mode.  The original script
+        toggles this via the global ``common.QUICK_TEST`` flag; we set that
+        flag here so that the function can be reused from other scripts that
+        also accept a ``quick`` option.
+
+    The function updates the ``common`` configuration, creates a
+    :class:`pydynamo.SimManager`, runs the simulation and finally returns the
+    collected production‑run data.
     """
+    # Apply quick‑test mode locally if requested.  ``common.configure`` sets
+    # *all* sweep parameters (event counts, RESTARTS, etc.) appropriate for a
+    # quick or full run.  Passing the ``quick`` flag directly keeps the logic
+    # simple and ensures the global ``common.QUICK_TEST`` flag is updated.
+    common.configure(quick)
+
     common.WORKDIR = str(workdir)
     common.N_VALUES = [N]
     # A single restart keeps the number of directories predictable
@@ -98,6 +127,48 @@ def _median_relative_change(previous: pd.DataFrame, current: pd.DataFrame, colum
         return float("nan"), 0
     change = (both[column + "_new"] - both[column + "_old"]).abs() / both[column + "_old"].abs()
     return float(change.median()), len(both)
+
+def _collect_diffusion(workdir: Path) -> tuple[float, float]:
+    """Fetch the diffusion data for *workdir* and return the mean ``D_A`` and ``D_B``.
+
+    The function mirrors the logic used in the original script where the
+    sweep results are written to ``common.WORKDIR``.  It creates a temporary
+    :class:`pydynamo.SimManager` that points at the same configuration and
+    extracts the nominal diffusion coefficients via :func:`_diffusion_table`.
+    ``NaN`` values (e.g., state points without production data) are ignored
+    when computing the mean.
+    """
+    # Ensure the common module points at the correct directory before creating
+    # the manager.  ``common.WORKDIR`` is a global that the SimManager reads.
+    common.WORKDIR = str(workdir)
+    # The state‑variable list may have been altered by the caller; rebuild it
+    # to guarantee consistency.
+    common.update_statevars()
+
+    mgr = pydynamo.SimManager(
+        common.WORKDIR,
+        common.STATEVARS,
+        common.OUTPUTS,
+        restarts=common.RESTARTS,
+        processes=1,
+    )
+    df = mgr.fetch_data(common.PARTICLE_EQUIL_EVENTS, only_current_statevars=True)
+    table = _diffusion_table(df)
+    # ``mean`` skips NaN by default.
+    mean_a = float(table["D_A"].mean()) if not table.empty else float("nan")
+    mean_b = float(table["D_B"].mean()) if not table.empty else float("nan")
+    return mean_a, mean_b
+
+def _relative_change(old: float, new: float) -> float:
+    """Return the relative change ``|new‑old| / |old|``.
+
+    If ``old`` is zero the function returns ``float('nan')`` to avoid a
+    division‑by‑zero error, matching the behaviour of the median‑relative
+    helper above.
+    """
+    if old == 0:
+        return float("nan")
+    return abs(new - old) / abs(old)
 
 
 def main() -> None:
@@ -161,7 +232,9 @@ def main() -> None:
     for N in particle_numbers:
         workdir = Path(f"RestitutionSweepWD_N_{N}")
         print(f"\nRunning sweep for N = {N} (workdir = {workdir}) …")
-        _run_sweep(N, quick=args.quick, workdir=workdir)
+        # Pass the quick flag explicitly; the function signature expects
+        # ``workdir`` as the second positional argument.
+        _run_sweep(N, workdir, processes=None, quick=args.quick)
         mean_a, mean_b = _collect_diffusion(workdir)
         print(f"  Mean D_A = {mean_a:.5g}, Mean D_B = {mean_b:.5g}")
 
