@@ -119,56 +119,20 @@ def _diffusion_table(df: pd.DataFrame) -> pd.DataFrame:
     return table.apply(lambda column: column.map(nominal))
 
 
-def _median_relative_change(previous: pd.DataFrame, current: pd.DataFrame, column: str) -> tuple[float, int]:
-    """Median of ``|new-old| / |old|`` over the state points present in both tables."""
+def _relative_change_summary(
+    previous: pd.DataFrame,
+    current: pd.DataFrame,
+    column: str,
+) -> tuple[float, float, int]:
+    """Return median, 90th percentile, and count for matched relative changes."""
+    if previous.empty or current.empty:
+        return float("nan"), float("nan"), 0
     both = previous[[column]].join(current[[column]], lsuffix="_old", rsuffix="_new", how="inner").dropna()
     both = both[both[column + "_old"] != 0]
     if both.empty:
-        return float("nan"), 0
+        return float("nan"), float("nan"), 0
     change = (both[column + "_new"] - both[column + "_old"]).abs() / both[column + "_old"].abs()
-    return float(change.median()), len(both)
-
-def _collect_diffusion(workdir: Path) -> tuple[float, float]:
-    """Fetch the diffusion data for *workdir* and return the mean ``D_A`` and ``D_B``.
-
-    The function mirrors the logic used in the original script where the
-    sweep results are written to ``common.WORKDIR``.  It creates a temporary
-    :class:`pydynamo.SimManager` that points at the same configuration and
-    extracts the nominal diffusion coefficients via :func:`_diffusion_table`.
-    ``NaN`` values (e.g., state points without production data) are ignored
-    when computing the mean.
-    """
-    # Ensure the common module points at the correct directory before creating
-    # the manager.  ``common.WORKDIR`` is a global that the SimManager reads.
-    common.WORKDIR = str(workdir)
-    # The state‑variable list may have been altered by the caller; rebuild it
-    # to guarantee consistency.
-    common.update_statevars()
-
-    mgr = pydynamo.SimManager(
-        common.WORKDIR,
-        common.STATEVARS,
-        common.OUTPUTS,
-        restarts=common.RESTARTS,
-        processes=1,
-    )
-    df = mgr.fetch_data(common.PARTICLE_EQUIL_EVENTS, only_current_statevars=True)
-    table = _diffusion_table(df)
-    # ``mean`` skips NaN by default.
-    mean_a = float(table["D_A"].mean()) if not table.empty else float("nan")
-    mean_b = float(table["D_B"].mean()) if not table.empty else float("nan")
-    return mean_a, mean_b
-
-def _relative_change(old: float, new: float) -> float:
-    """Return the relative change ``|new‑old| / |old|``.
-
-    If ``old`` is zero the function returns ``float('nan')`` to avoid a
-    division‑by‑zero error, matching the behaviour of the median‑relative
-    helper above.
-    """
-    if old == 0:
-        return float("nan")
-    return abs(new - old) / abs(old)
+    return float(change.median()), float(change.quantile(0.9)), len(both)
 
 
 def main() -> None:
@@ -191,6 +155,12 @@ def main() -> None:
         help="Relative tolerance for convergence (default 5%%).",
     )
     parser.add_argument(
+        "--min-matched-points",
+        type=int,
+        default=10,
+        help="Minimum shared valid state points required to declare convergence (default 10).",
+    )
+    parser.add_argument(
         "-quick",
         action="store_true",
         help="Run in QUICK_TEST mode to keep each sweep short.",
@@ -208,6 +178,8 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    if args.min_matched_points < 1:
+        parser.error("--min-matched-points must be at least 1")
 
     # ------------------------------------------------------------------
     # Apply global modifications requested by the user before any sweep.
@@ -225,8 +197,7 @@ def main() -> None:
         common.update_statevars()
 
     particle_numbers = sorted(args.particle_numbers)
-    previous_a: float | None = None
-    previous_b: float | None = None
+    previous_table: pd.DataFrame | None = None
     chosen_n: int | None = None
 
     for N in particle_numbers:
@@ -234,23 +205,34 @@ def main() -> None:
         print(f"\nRunning sweep for N = {N} (workdir = {workdir}) …")
         # Pass the quick flag explicitly; the function signature expects
         # ``workdir`` as the second positional argument.
-        _run_sweep(N, workdir, processes=None, quick=args.quick)
-        mean_a, mean_b = _collect_diffusion(workdir)
-        print(f"  Mean D_A = {mean_a:.5g}, Mean D_B = {mean_b:.5g}")
+        df = _run_sweep(N, workdir, processes=None, quick=args.quick)
+        table = _diffusion_table(df)
+        valid_a = int(table["D_A"].notna().sum()) if not table.empty else 0
+        valid_b = int(table["D_B"].notna().sum()) if not table.empty else 0
+        print(f"  Valid state points: D_A {valid_a}, D_B {valid_b}")
 
-        if previous_a is not None and previous_b is not None:
-            rel_a = _relative_change(previous_a, mean_a)
-            rel_b = _relative_change(previous_b, mean_b)
+        if previous_table is not None:
+            median_a, p90_a, count_a = _relative_change_summary(previous_table, table, "D_A")
+            median_b, p90_b, count_b = _relative_change_summary(previous_table, table, "D_B")
             print(
-                f"  Relative change vs previous N: D_A {rel_a:.3%}, D_B {rel_b:.3%}"
+                f"  Matched state points: D_A {count_a}, D_B {count_b}"
             )
-            if rel_a < args.tolerance and rel_b < args.tolerance:
+            print(f"  Median relative change: D_A {median_a:.3%}, D_B {median_b:.3%}")
+            print(f"  90th percentile change: D_A {p90_a:.3%}, D_B {p90_b:.3%}")
+            enough_matches = count_a >= args.min_matched_points and count_b >= args.min_matched_points
+            if enough_matches and median_a < args.tolerance and median_b < args.tolerance:
                 chosen_n = N
                 print(
-                    f"Converged at N = {N} (tolerance {args.tolerance:.1%})"
+                    f"Converged at N = {N} (median tolerance {args.tolerance:.1%}; "
+                    f"minimum matched points {args.min_matched_points})"
                 )
                 break
-        previous_a, previous_b = mean_a, mean_b
+            if not enough_matches:
+                print(
+                    "  Not enough matched points to assess convergence "
+                    f"(requires {args.min_matched_points})."
+                )
+        previous_table = table
 
     if chosen_n is None:
         print(

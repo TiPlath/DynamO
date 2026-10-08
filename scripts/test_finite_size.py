@@ -15,9 +15,11 @@ import shutil
 from pathlib import Path
 
 import pytest
+import pandas as pd
 
 import restitution_common as common
 import pydynamo
+from finite_size_convergence import _relative_change_summary
 
 
 @pytest.fixture(scope="function")
@@ -84,3 +86,28 @@ def test_finite_size_effects(clean_workdir):
     # Ensure that both N values appear somewhere in the directory names.
     assert any("N_2048" in d for d in dirs_after_first)
     assert any("N_2916" in d for d in dirs_after_second)
+
+
+def test_relative_change_summary_uses_matched_nonzero_points():
+    index = pd.Index(["shared-a", "shared-b", "zero-baseline", "previous-only"])
+    previous = pd.DataFrame({"D_A": [10.0, 20.0, 0.0, 50.0]}, index=index)
+    current = pd.DataFrame(
+        {"D_A": [11.0, 10.0, 100.0, float("nan")]}, index=index
+    )
+
+    median, p90, count = _relative_change_summary(previous, current, "D_A")
+
+    assert median == pytest.approx(0.3)
+    assert p90 == pytest.approx(0.46)
+    assert count == 2
+
+
+def test_relative_change_summary_handles_no_valid_matches():
+    previous = pd.DataFrame({"D_A": [0.0]}, index=["point"])
+    current = pd.DataFrame({"D_A": [1.0]}, index=["point"])
+
+    median, p90, count = _relative_change_summary(previous, current, "D_A")
+
+    assert median != median
+    assert p90 != p90
+    assert count == 0
