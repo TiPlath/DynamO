@@ -146,6 +146,7 @@ def setup_worker(config, state, logfile, particle_equil_events):
     # pydynamo passes state as a tuple of (name, value) pairs, not a dict.
     state = dict(state)
 
+    config = os.path.abspath(config)
     N = state["N"]
     ncells_unrounded = (N / 4.0) ** (1.0 / 3.0)
     ncells = int(round(ncells_unrounded))
@@ -160,7 +161,7 @@ def setup_worker(config, state, logfile, particle_equil_events):
 
     n_large, n_small = binary_particle_counts(N, delta, xhat)
     mass_ratio = delta**3  # equal mass density for both species
-    workdir = os.path.dirname(config) or "."
+    workdir = os.path.dirname(config)
 
     pack_args = [
         "dynamod",
@@ -190,16 +191,15 @@ def setup_worker(config, state, logfile, particle_equil_events):
         check_call(pack_args + ["-d", repr(direct_density), "-o", config], stdout=logfile, stderr=logfile)
     else:
         loose_config = os.path.join(workdir, "loose.config.xml.bz2")
+        compression_data = os.path.join(workdir, "compression.data.xml.bz2")
         check_call(
             pack_args + ["-d", repr(MAX_LATTICE_DENSITY), "-o", loose_config], stdout=logfile, stderr=logfile
         )
         try:
-            # cwd=workdir below, so arguments must be relative to it (not
-            # workdir-prefixed) or dynarun looks for a doubled-up path.
             check_call(
                 [
                     "dynarun",
-                    os.path.basename(loose_config),
+                    loose_config,
                     "--engine",
                     "3",
                     "--target-pack-frac",
@@ -207,13 +207,12 @@ def setup_worker(config, state, logfile, particle_equil_events):
                     "-c",
                     "20000000",
                     "-o",
-                    os.path.basename(config),
+                    config,
                     "--out-data-file",
-                    "compression.data.xml.bz2",
+                    compression_data,
                 ],
                 stdout=logfile,
                 stderr=logfile,
-                cwd=workdir,
             )
         except CalledProcessError:
             print(
