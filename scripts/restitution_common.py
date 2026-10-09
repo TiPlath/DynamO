@@ -272,6 +272,20 @@ def setup_worker(config, state, logfile, particle_equil_events):
         scheduler = xml.tree.find(".//Scheduler")
         if scheduler is not None:
             scheduler.set("Type", "NeighbourList")
+        cells = xml.tree.find(".//Global[@Name='SchedulerNBList']")
+        if cells is None:
+            globals_tag = xml.tree.find(".//Globals")
+            if globals_tag is None:
+                raise RuntimeError("No Globals section in compressed config")
+            cells = pydynamo.ET.SubElement(
+                globals_tag,
+                "Global",
+                {"Type": "Cells", "Name": "SchedulerNBList", "OverLink": "2"},
+            )
+            pydynamo.ET.SubElement(cells, "IDRange", {"Type": "All"})
+        else:
+            cells.set("Type", "Cells")
+            cells.set("OverLink", "2")
     interactions = xml.tree.findall(".//Interaction[@Type='HardSphere']")
     if not interactions:
         raise RuntimeError("No HardSphere interactions found after generation")
