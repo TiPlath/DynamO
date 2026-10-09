@@ -214,19 +214,64 @@ def setup_worker(config, state, logfile, particle_equil_events):
                 stdout=logfile,
                 stderr=logfile,
             )
-        except CalledProcessError:
+        except CalledProcessError as neighbourlist_error:
+            # During compression, the neighbour-list cell range can become
+            # temporarily larger than the range supported by four cells per
+            # dimension. Retry with the all-pairs scheduler, which has no cells.
+            dumb_loose_config = os.path.join(workdir, "loose.dumb.config.xml.bz2")
+            dumb_config = os.path.join(workdir, "config.dumb.xml.bz2")
+            dumb_xml = ConfigFile(loose_config)
+            scheduler = dumb_xml.tree.find(".//Scheduler")
+            if scheduler is None:
+                raise RuntimeError("No Scheduler found in loose compression config")
+            scheduler.set("Type", "Dumb")
+            dumb_xml.save(dumb_loose_config)
+
+            try:
+                check_call(
+                    [
+                        "dynarun",
+                        dumb_loose_config,
+                        "--engine",
+                        "3",
+                        "--target-pack-frac",
+                        repr(phi),
+                        "-c",
+                        "20000000",
+                        "-o",
+                        dumb_config,
+                        "--out-data-file",
+                        compression_data,
+                    ],
+                    stdout=logfile,
+                    stderr=logfile,
+                )
+            except CalledProcessError as dumb_error:
+                print(
+                    f"Skipping N={N} delta={delta} xhat={xhat} phi={phi}: "
+                    "compression failed with both NeighbourList "
+                    f"(exit {neighbourlist_error.returncode}) and Dumb "
+                    f"(exit {dumb_error.returncode}) schedulers",
+                    file=logfile,
+                    flush=True,
+                )
+                raise pydynamo.SkipThisPoint()
+
+            os.replace(dumb_config, config)
             print(
-                f"Skipping N={N} delta={delta} xhat={xhat} phi={phi}: compression "
-                "to the target packing fraction failed (the system is likely too "
-                "small for this size/concentration ratio -- try a larger N)",
+                f"Compression succeeded with Dumb scheduler after NeighbourList "
+                f"failed (exit {neighbourlist_error.returncode})",
                 file=logfile,
                 flush=True,
             )
-            raise pydynamo.SkipThisPoint()
 
     # dynamod has no CLI switch for the restitution coefficient, nor for
     # adding a Gaussian thermostat, so both are patched into the XML here.
     xml = pydynamo.ConfigFile(config)
+    if direct_density > MAX_LATTICE_DENSITY:
+        scheduler = xml.tree.find(".//Scheduler")
+        if scheduler is not None:
+            scheduler.set("Type", "NeighbourList")
     interactions = xml.tree.findall(".//Interaction[@Type='HardSphere']")
     if not interactions:
         raise RuntimeError("No HardSphere interactions found after generation")
