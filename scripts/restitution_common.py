@@ -302,6 +302,45 @@ def setup_worker(config, state, logfile, particle_equil_events):
     xml.save(config)
 
 
+def upgrade_existing_start_configs(workdir):
+    """Add overlinked cell lists to resumed configs whose boxes are too small."""
+    from pathlib import Path
+
+    updated = 0
+    for config in Path(workdir).glob("*/start.config.xml.bz2"):
+        xml = ConfigFile(str(config))
+        size = xml.tree.find(".//SimulationSize")
+        if size is None:
+            continue
+        lengths = [float(size.attrib[axis]) for axis in ("x", "y", "z")]
+        diameters = [
+            float(interaction.attrib["Diameter"])
+            for interaction in xml.tree.findall(".//Interaction[@Type='HardSphere']")
+        ]
+        if not diameters or min(lengths) / 4.0 >= max(diameters):
+            continue
+
+        cells = xml.tree.find(".//Global[@Name='SchedulerNBList']")
+        if cells is None:
+            globals_tag = xml.tree.find(".//Globals")
+            if globals_tag is None:
+                continue
+            cells = pydynamo.ET.SubElement(
+                globals_tag,
+                "Global",
+                {"Type": "Cells", "Name": "SchedulerNBList", "OverLink": "2"},
+            )
+            pydynamo.ET.SubElement(cells, "IDRange", {"Type": "All"})
+        elif cells.attrib.get("OverLink") == "2":
+            continue
+        else:
+            cells.set("OverLink", "2")
+
+        xml.save(str(config))
+        updated += 1
+    return updated
+
+
 # ---------------------------------------------------------------------------
 # Config-file introspection (lets pydynamo re-derive state vars if needed)
 # ---------------------------------------------------------------------------

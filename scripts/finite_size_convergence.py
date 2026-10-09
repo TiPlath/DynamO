@@ -97,6 +97,9 @@ def _run_sweep(
         restarts=common.RESTARTS,
         processes=processes,
     )
+    upgraded = common.upgrade_existing_start_configs(common.WORKDIR)
+    if upgraded:
+        print(f"Upgraded {upgraded} existing start configs for small-box neighbour lists")
     mgr.run(
         setup_worker=common.setup_worker,
         particle_equil_events=common.PARTICLE_EQUIL_EVENTS,
